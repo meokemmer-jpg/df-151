@@ -1,0 +1,22 @@
+{
+  "pav": {
+    "env_tag": "local",
+    "missing_anchors": [],
+    "ok": true
+  },
+  "tracker_output": {
+    "df": "DF-151",
+    "iso_timestamp": "2026-06-22T15:25:42.860481+00:00",
+    "net_yield_pct": 63.9485,
+    "occupancy_per_property": {
+      "hotel_alpha": 0.91,
+      "hotel_beta": 0.84,
+      "hotel_gamma": 0.88
+    },
+    "opex_eur": 42000.0,
+    "rental_income_eur": 125000.0,
+    "source": "mock",
+    "vacancy_loss_eur": 8500.0,
+    "welle": "25"
+  }
+}
