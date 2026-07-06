@@ -1,6 +1,6 @@
 {
   "df": "df-151",
-  "ts": "2026-06-22T15:25:43.000695+00:00",
+  "ts": "2026-07-06T06:33:53.869109+00:00",
   "crux": "[CRUX-MK]",
   "winner_provider": "incumbent-kept",
   "winner_tests_passed": true,
@@ -20,13 +20,13 @@
     },
     {
       "provider": "codex",
-      "parse_ok": true,
-      "tests_passed": true,
-      "n_tests": 1,
-      "n_assert": 15,
-      "coverage_pct": 81.0,
-      "q": 1423.0,
-      "error": null
+      "parse_ok": false,
+      "tests_passed": false,
+      "n_tests": 0,
+      "n_assert": null,
+      "coverage_pct": null,
+      "q": 0.0,
+      "error": "kein 2-Block-Output (nach Retry)"
     },
     {
       "provider": "sonnet",
