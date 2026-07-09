@@ -1,0 +1,6 @@
+{
+  "verdict": "RED",
+  "reason": "===== short test summary info ============================\nFAILED tests/test_df-151_engine.py::test_df151_metrics_are_computed_from_real_csv_and_discriminate_counter_input\n1 failed, 2 passed in 0.09s\n",
+  "ts": "2026-07-09T01:46:36.527787+00:00",
+  "attempts": 1
+}

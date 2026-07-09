@@ -1,138 +1,98 @@
-"""Universal Test-Template fuer Welle-25 DFs (DF-113 bis DF-137) [CRUX-MK]"""
-import importlib.util, sys, os, re
-from pathlib import Path
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-DF_DIR = Path(__file__).parent.parent
-DF_NAME = "df-151"  # wird substituiert pro DF
-ENGINE = DF_DIR / f"{DF_NAME}-engine.py"
+import csv
+import importlib
+import json
+from datetime import date
 
-
-def _load():
-    spec = importlib.util.spec_from_file_location("engine", str(ENGINE))
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["engine"] = mod  # Python 3.14 dataclasses Workaround
-    spec.loader.exec_module(mod)
-    return mod
+m151 = importlib.import_module("151")
 
 
-def test_engine_imports():
-    """Engine kann ohne Fehler geladen werden."""
-    mod = _load()
-    assert hasattr(mod, "collect_tracker_output")
+def _write_rent_roll(path, rows):
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["unit_id", "monthly_rent", "occupied", "operating_expense"])
+        writer.writeheader()
+        writer.writerows(rows)
 
 
-def test_iso_now():
-    mod = _load()
-    assert hasattr(mod, "iso_now")
-    ts = mod.iso_now()
-    assert "T" in ts and ":" in ts
+def _independent_totals(rows):
+    occupied_rows = [row for row in rows if row["occupied"] == "occupied"]
+    total_units = len(rows)
+    occupied_units = len(occupied_rows)
+    scheduled_rent = sum(float(row["monthly_rent"]) for row in rows)
+    rental_income = sum(float(row["monthly_rent"]) for row in occupied_rows)
+    expenses = sum(float(row["operating_expense"]) for row in rows)
+    return {
+        "total_units": float(total_units),
+        "occupied_units": float(occupied_units),
+        "scheduled_rent": scheduled_rent,
+        "rental_income": rental_income,
+        "operating_expenses": expenses,
+        "vacancy_rate": (total_units - occupied_units) / total_units,
+        "noi": rental_income - expenses,
+    }
 
 
-def test_file_stable_helper():
-    mod = _load()
-    assert hasattr(mod, "_file_stable")
-    # Non-existent file -> not stable
-    assert not mod._file_stable(Path("/nonexistent/abc"))
+def test_df151_metrics_are_computed_from_real_csv_and_discriminate_counter_input(tmp_path):
+    productive_rows = [
+        {"unit_id": "A", "monthly_rent": "1400", "occupied": "occupied", "operating_expense": "250"},
+        {"unit_id": "B", "monthly_rent": "1600", "occupied": "occupied", "operating_expense": "300"},
+        {"unit_id": "C", "monthly_rent": "1200", "occupied": "vacant", "operating_expense": "200"},
+    ]
+    adversarial_rows = [dict(row, occupied="vacant") for row in productive_rows]
+
+    productive_csv = tmp_path / "productive-rent-roll.csv"
+    adversarial_csv = tmp_path / "adversarial-rent-roll.csv"
+    _write_rent_roll(productive_csv, productive_rows)
+    _write_rent_roll(adversarial_csv, adversarial_rows)
+
+    productive_report = m151.build_report_from_csv(productive_csv, as_of=date(2026, 7, 9))
+    adversarial_report = m151.build_report_from_csv(adversarial_csv, as_of=date(2026, 7, 9))
+
+    productive_expected = _independent_totals(productive_rows)
+    adversarial_expected = _independent_totals(adversarial_rows)
+
+    assert productive_report["mission"] == "df-151"
+    assert productive_report["metrics"]["rental_income"] == productive_expected["rental_income"]
+    assert productive_report["metrics"]["noi"] == productive_expected["noi"]
+    assert productive_report["metrics"]["vacancy_rate"] == productive_expected["vacancy_rate"]
+
+    assert adversarial_report["metrics"]["rental_income"] == adversarial_expected["rental_income"]
+    assert adversarial_report["metrics"]["noi"] == adversarial_expected["noi"]
+    assert adversarial_report["metrics"]["vacancy_rate"] == adversarial_expected["vacancy_rate"]
+
+    assert productive_report["metrics"] != adversarial_report["metrics"]
+    assert productive_report["metrics"]["rental_income"] > adversarial_report["metrics"]["rental_income"]
+    assert productive_report["metrics"]["noi"] > adversarial_report["metrics"]["noi"]
+    assert productive_report["metrics"]["vacancy_rate"] < adversarial_report["metrics"]["vacancy_rate"]
 
 
-def test_k16_lock_acquire_release():
-    """K16: Concurrent-Spawn-Mutex via acquire_lock_with_identity + release_lock."""
-    mod = _load()
-    assert hasattr(mod, "acquire_lock_with_identity")
-    assert hasattr(mod, "release_lock")
-    mod.release_lock()
-    assert mod.acquire_lock_with_identity()
-    mod.release_lock()
+def test_df151_writes_real_json_report_file(tmp_path):
+    rows = [
+        {"unit_id": "A", "monthly_rent": "900", "occupied": "occupied", "operating_expense": "100"},
+        {"unit_id": "B", "monthly_rent": "1100", "occupied": "vacant", "operating_expense": "150"},
+    ]
+    csv_path = tmp_path / "rent-roll.csv"
+    _write_rent_roll(csv_path, rows)
+
+    units = m151.load_units_from_csv(csv_path)
+    output_path = m151.write_report(units, report_dir=tmp_path / "reports", as_of=date(2026, 7, 9))
+
+    assert output_path.exists()
+    persisted = json.loads(output_path.read_text(encoding="utf-8"))
+    assert persisted == m151.build_report(units, as_of=date(2026, 7, 9))
 
 
-def test_k17_pav_detects_missing_anchor():
-    """K17: Pre-Action-Verification erkennt fehlende Anker."""
-    mod = _load()
-    assert hasattr(mod, "k17_pre_action_verification")
-    res = mod.k17_pre_action_verification([Path("/nonexistent/anchor")])
-    assert isinstance(res, dict)
-    # Either "ok"=False oder "missing_anchors" oder "failed_anchors" key
-    assert res.get("ok") is False or len(res.get("missing_anchors", res.get("failed_anchors", []))) > 0
+def test_df151_rejects_invalid_real_input_file(tmp_path):
+    csv_path = tmp_path / "invalid-rent-roll.csv"
+    _write_rent_roll(csv_path, [
+        {"unit_id": "A", "monthly_rent": "-1", "occupied": "occupied", "operating_expense": "100"},
+    ])
 
-
-def test_mock_mode_default():
-    """Activation-Gate default false (Mock-Mode)."""
-    mod = _load()
-    assert hasattr(mod, "_is_real_api_enabled")
-    # Clear any matching env var
-    for k in list(os.environ.keys()):
-        if k.startswith("DF_") and "REAL_API_ENABLED" in k:
-            os.environ.pop(k, None)
-    assert mod._is_real_api_enabled() is False
-
-
-def test_decision_keyword_scanner_exists():
-    """Patch P4: Q_0-Sperr-Negative-Scan vorhanden."""
-    mod = _load()
-    assert hasattr(mod, "scan_output_for_decision_keywords")
-    assert hasattr(mod, "assert_no_decision_keywords")
-
-
-def test_decision_keyword_scanner_detects_verb_stems():
-    """FINDING-2-FIX: Verb-Stem-Pattern detected conjugated forms."""
-    mod = _load()
-    test_phrases = ["Wir entscheiden uns", "empfehlen wir", "Du solltest"]
-    detected = sum(1 for p in test_phrases if mod.scan_output_for_decision_keywords(p))
-    assert detected >= 1, f"Stem-Pattern detected {detected}/3 phrases"
-
-
-def test_collect_tracker_output_returns_valid():
-    """Engine produziert valid TrackerOutput ohne Decision-Keywords."""
-    mod = _load()
-    out = mod.collect_tracker_output()
-    assert out is not None
-    assert hasattr(out, "welle") or hasattr(out, "df") or hasattr(out, "iso_timestamp")
-
-
-def test_tracker_output_no_decision_keywords():
-    """Q_0-Sperr enforced via assert_no_decision_keywords im collect."""
-    mod = _load()
-    # collect_tracker_output ruft assert_no_decision_keywords intern auf
-    # Wenn keine Exception -> OK
     try:
-        out = mod.collect_tracker_output()
-        assert out is not None
-    except (ValueError, AssertionError) as e:
-        if "Q_0" in str(e) or "decision" in str(e).lower():
-            assert False, f"Q_0-Sperr triggered im collect: {e}"
-        raise
-
-
-def test_main_returns_exit_code():
-    """main() returns int (0 normal, 3 lock-failed)."""
-    mod = _load()
-    assert hasattr(mod, "main")
-    mod.release_lock()
-    rc = mod.main()
-    assert rc in (0, 3, 1)  # 0=ok, 3=lock-fail, 1=non-compliant
-
-
-# K_0/Q_0-Sperr NEGATIVE-Tests (3)
-def test_no_auto_decision_in_source():
-    """Source darf keine Auto-Decision-Patterns enthalten."""
-    src = ENGINE.read_text(encoding="utf-8").lower()
-    forbidden = ["def auto_decide", "def auto_recommend", "def auto_apply", "def execute_decision"]
-    for f in forbidden:
-        assert f not in src, f"Forbidden auto-decision: {f}"
-
-
-def test_no_real_api_call_without_env():
-    """Real-API-Calls nur via _is_real_api_enabled gated."""
-    mod = _load()
-    os.environ.pop(f"DF_{DF_NAME.replace('df-', '')}_REAL_API_ENABLED", None)
-    assert not mod._is_real_api_enabled()
-
-
-def test_engine_handles_lock_collision():
-    """Lock-Collision: 2 Acquires hintereinander, 2. failed."""
-    mod = _load()
-    mod.release_lock()
-    assert mod.acquire_lock_with_identity()
-    # 2nd acquire should fail (lock already held)
-    assert not mod.acquire_lock_with_identity()
-    mod.release_lock()
+        m151.load_units_from_csv(csv_path)
+    except ValueError as exc:
+        assert "monthly_rent" in str(exc)
+    else:
+        raise AssertionError("negative rent from CSV must be rejected")
